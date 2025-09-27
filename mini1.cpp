@@ -3,6 +3,7 @@
 #include <iostream>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 
 
 struct User { int id; std::string name; int age; };
@@ -76,6 +77,38 @@ void load_csv(const char* path, std::vector<T>& out_items, int has_header, Parse
     std::fclose(f);
 }
 
+template<typename T, typename Parser>
+void load_csv_from_dir(const std::string& dir, std::vector<T>& out_items, int has_header, Parser parser, 
+    const std::string& filename_pattern = ".csv") {
+        out_items.clear();
+        try {
+            // Recursively iterate through all files in the directory
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(dir)) {
+                if (entry.is_regular_file()) {
+                    std::string file_path = entry.path().string();
+                    
+                    // Check if file matches the pattern (default: .csv)
+                    if (file_path.find(filename_pattern) != std::string::npos) {
+                        std::cout << "Loading CSV file: " << file_path << std::endl;
+                        
+                        // Load CSV from this file
+                        std::vector<T> file_items;
+                        load_csv(file_path.c_str(), file_items, has_header, parser);
+                        
+                        // Append to the main collection
+                        out_items.insert(out_items.end(), file_items.begin(), file_items.end());
+                        
+                        std::cout << "Loaded " << file_items.size() << " records from " << file_path << std::endl;
+                    }
+                }
+            }
+        } catch (const std::filesystem::filesystem_error& ex) {
+            std::cerr << "Filesystem error: " << ex.what() << std::endl;
+        }
+        
+        std::cout << "Total records loaded: " << out_items.size() << std::endl;
+}
+
 // Generic printer
 template<typename T, typename Printer>
 void print_items(const std::vector<T>& items, Printer printer) {
@@ -89,9 +122,13 @@ void print_items(const std::vector<T>& items, Printer printer) {
 
 int main(int argc, char** argv) {
     if (argc <= 1) {
-        std::fprintf(stderr, "Usage: %s <example.csv>\n", argv[0] ? argv[0] : "mini1");
+        std::fprintf(stderr, "Usage: %s <csv_file_or_directory>\n", argv[0] ? argv[0] : "mini1");
+        std::fprintf(stderr, "Examples:\n");
+        std::fprintf(stderr, "  %s single_file.csv\n", argv[0] ? argv[0] : "mini1");
+        std::fprintf(stderr, "  %s datasets/2020-fire/data\n", argv[0] ? argv[0] : "mini1");
         return 1;
     }
+
     const char* path = argv[1];
 
     std::vector<fire> fires;
@@ -117,7 +154,19 @@ int main(int argc, char** argv) {
                     f.latitude.c_str(), f.longitude.c_str(), f.UTC.c_str(), f.concentration.c_str());
     };
 
-    load_csv(path, fires, 1, fire_parser);
+    // Check if the path is a directory or a file
+    std::filesystem::path fs_path(path);
+    
+    if (std::filesystem::is_directory(fs_path)) {
+        //std::cout << "Loading CSV files from directory: " << path << std::endl;
+        // Load from all subdirectories recursively
+        load_csv_from_dir(path, fires, 1, fire_parser);
+    } else {
+        std::cout << "Loading single CSV file: " << path << std::endl;
+        // Load single file (original behavior)
+        load_csv(path, fires, 1, fire_parser);
+    }
+    
     print_items<fire>(fires, fire_printer);
     return 0;
 }
