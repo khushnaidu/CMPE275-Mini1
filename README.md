@@ -18,6 +18,14 @@
 
 ### Currently implementing a parallel loop pattern during data loading and querying, using a work-sharing/data parallelism pattern.
 
+- With max threads enabled with OpenMP
+
+![alt text](image.png)
+
+- Unoptimized with no threading
+
+![alt text](image.png)
+
 #### Stuff to add
 1. Maybe trying out leader-worker and benchmarking between centralized and decentralized (using RR)
 2. Push or pull (Scatter/Gather) approach?
