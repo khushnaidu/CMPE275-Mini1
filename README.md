@@ -15,3 +15,10 @@
 
 ### For parallel optimization with OpenMP uncomment the line:
 `SET(OPENMP_CXX_FLAGS "-O3 -fopenmp")`
+
+### Currently implementing a parallel loop pattern during data loading and querying, using a work-sharing/data parallelism pattern.
+
+#### Stuff to add
+1. Maybe trying out leader-worker and benchmarking between centralized and decentralized (using RR)
+2. Push or pull (Scatter/Gather) approach?
+3. Feed-back approaches?
