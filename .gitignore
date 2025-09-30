@@ -1,2 +1,4 @@
 datasets/
 build/
+.vscode/
+.DS_Store
