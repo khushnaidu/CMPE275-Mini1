@@ -6,7 +6,6 @@
 #include <filesystem>
 // Conditional compilation: only include OpenMP headers if _OPENMP is defined at compile time
 #ifdef _OPENMP
-#include <omp.h>
 // Mutex needed for thread-safe access to shared data in parallel sections
 #include <mutex>
 #endif
