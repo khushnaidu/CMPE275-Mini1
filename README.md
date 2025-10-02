@@ -20,13 +20,13 @@
 
 - With max threads enabled with OpenMP
 
-![alt text](image.png)
+![alt text](images/image.png)
 
 - Unoptimized with no threading
 
-![alt text](image.png)
+![alt text](images/image1.png)
 
 #### Stuff to add
-1. Maybe trying out leader-worker and benchmarking between centralized and decentralized (using RR)
+1. Maybe trying out leader-worker with centralized, decentralized queues and benchmarking between centralized and decentralized (using RR)
 2. Push or pull (Scatter/Gather) approach?
 3. Feed-back approaches?
