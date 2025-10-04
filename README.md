@@ -1,32 +1,44 @@
-# Optimization of Data Storage and Retrieval using Parellization with OpenMP
+# Data Storage and Retrieval Optimization using OpenMP Parallelization
 
-## Setup
-1. Copy the datasets folder into the main directory
-2. Build and compile using CMake
+## Overview
+This project implements parallel data processing for wildfire and population datasets using OpenMP to optimize storage and retrieval operations.
+
+
+## Build Instructions
+
+1. Place the datasets folder in the project root directory
+2. Build the project:
+```bash
+mkdir build && cd build
+cmake ..
+make
 ```
-    mkdir build && cd build
-    cmake ..
-    make
+
+## Usage
+```bash
+./test_fire
+./test_population
 ```
-## Implemented a sample benchmark test of the 2020 fire data with CSV parsing and loading from multiple files and searching through folders recursively
 
-### For regular data loading and retrieval comment out the line:
-`#SET(OPENMP_CXX_FLAGS "-O3 -fopenmp")`
+## Project Structure
+- `src/firedata/` - Wildfire data processing implementation
+- `src/PopulationData/` - Population data processing implementation
+- `src/common/` - Shared utilities and parallel processing strategies
+- `test/` - Unit tests for data processing modules
 
-### For parallel optimization with OpenMP uncomment the line:
-`SET(OPENMP_CXX_FLAGS "-O3 -fopenmp")`
+## Implementation Details
 
-### Currently implementing a parallel loop pattern during data loading and querying, using a work-sharing/data parallelism pattern.
+### Parallel Processing
+The project utilizes OpenMP parallel strategies for efficient data processing:
+- Parallel data loading and parsing
+- Concurrent data structure operations
+- Thread-safe data aggregation
 
-- With max threads enabled with OpenMP
+### Data Structures
+- Custom record types for fire and population data
+- Optimized storage formats for query performance
+- Memory-efficient data representations
 
-![alt text](images/image.png)
 
-- Unoptimized with no threading
 
-![alt text](images/image1.png)
 
-#### Stuff to add
-1. Maybe trying out leader-worker with centralized, decentralized queues and benchmarking between centralized and decentralized (using RR)
-2. Push or pull (Scatter/Gather) approach?
-3. Feed-back approaches?

@@ -1,4 +1,4 @@
-// fire data benchmark test
+// population data benchmark test
 // compares three parallelization strategies
 // 1. openmp - data parallelism with pragma omp parallel for
 // 2. leader-worker centralized queue - dynamic load balancing
@@ -7,7 +7,7 @@
 
 #include <cstdio>
 #include <string>
-#include "firedata/fireData.hpp"
+#include "PopulationData/populationData.hpp"
 #include "common/parallelStrategy.hpp"
 #include "test/benchmark.hpp"
 #include "utils.hpp"
@@ -27,12 +27,12 @@ const int NUM_STRATEGIES = 3;
 
 int main(int argc, char** argv) {
     printf("\n========================================\n");
-    printf("Fire Data Benchmark\n");
+    printf("Population Data Benchmark\n");
     printf("Comparing Parallelization Strategies\n");
     printf("========================================\n\n");
 
     // default path to data
-    std::string dataPath = "../datasets/2020-fire/data";
+    std::string dataPath = "/Users/khushnaidu/mini1/API_SP.POP.TOTL_DS2_en_csv_v2_3401680.csv";
     if (argc > 1) {
         dataPath = argv[1];
     }
@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
     // ========================================================================
     for (int s = 0; s < NUM_STRATEGIES; ++s) {
         ParallelStrategy strategy = STRATEGIES[s];
-
+        
         printf("\n========================================\n");
         printf("Strategy: %s\n", strategyToString(strategy));
         printf("========================================\n\n");
@@ -53,16 +53,16 @@ int main(int argc, char** argv) {
         BenchmarkStats loadStats("Load");
         for (int i = 0; i < LOAD_ITERATIONS; ++i) {
             // new object each iteration
-            FireData fireData;
+            PopulationData populationData;
             Timer timer;
 
             timer.start();
-            fireData.loadFromDirectory(dataPath, strategy);
+            populationData.loadFromDirectory(dataPath, strategy);
             timer.stop();
 
             double elapsed = timer.elapsed_ms();
             loadStats.addTiming(elapsed);
-            printf("Load %d: %.3f ms (%zu records)\n", i + 1, elapsed, fireData.size());
+            printf("Load %d: %.3f ms (%zu records)\n", i + 1, elapsed, populationData.size());
         }
         loadStats.printStatistics();
     }
@@ -75,41 +75,41 @@ int main(int argc, char** argv) {
     printf("========================================\n\n");
 
     // load once for all query tests
-    FireData fireData;
-    fireData.loadFromDirectory(dataPath, ParallelStrategy::OPENMP);
-    printf("Loaded %zu records for query tests\n\n", fireData.size());
+    PopulationData populationData;
+    populationData.loadFromDirectory(dataPath, ParallelStrategy::OPENMP);
+    printf("Loaded %zu records for query tests\n\n", populationData.size());
 
     // test each query with each strategy
     for (int s = 0; s < NUM_STRATEGIES; ++s) {
         ParallelStrategy strategy = STRATEGIES[s];
-
+        
         printf("\n--- Strategy: %s ---\n\n", strategyToString(strategy));
-
-        // pollutant query test
-        BenchmarkStats pollutantStats("Pollutant Query (PM2.5)");
+        
+        // year range query test
+        BenchmarkStats yearRangeStats("Year Range Query (1960-2020)");
         for (int i = 0; i < QUERY_ITERATIONS; ++i) {
             Timer timer;
             timer.start();
-            auto results = fireData.queryByPollutant("PM2.5");
+            auto results = populationData.queryByYearRange(1960, 2020, strategy);
             timer.stop();
 
             double elapsed = timer.elapsed_ms();
-            pollutantStats.addTiming(elapsed);
-            printf("Pollutant query %d: %.3f ms (%zu results)\n", i + 1, elapsed, results.size());
+            yearRangeStats.addTiming(elapsed);
+            printf("Year range query %d: %.3f ms (%zu results)\n", i + 1, elapsed, results.size());
         }
-        pollutantStats.printStatistics();
+        yearRangeStats.printStatistics();
 
-        // value range query test
-        BenchmarkStats rangeStats("Value Range Query (5.0-15.0)");
+        // population range query test
+        BenchmarkStats rangeStats("Population Range Query (100M-1B in 2020)");
         for (int i = 0; i < QUERY_ITERATIONS; ++i) {
             Timer timer;
             timer.start();
-            auto results = fireData.queryByValueRange(5.0, 15.0, strategy);
+            auto results = populationData.queryByPopulationRange(100000000, 1000000000, 2020, strategy);
             timer.stop();
 
             double elapsed = timer.elapsed_ms();
             rangeStats.addTiming(elapsed);
-            printf("Value range query %d: %.3f ms (%zu results)\n", i + 1, elapsed, results.size());
+            printf("Population range query %d: %.3f ms (%zu results)\n", i + 1, elapsed, results.size());
         }
         rangeStats.printStatistics();
     }
