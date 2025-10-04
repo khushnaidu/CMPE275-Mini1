@@ -3,8 +3,8 @@ cmake_minimum_required(VERSION 4.0)
 project(mini1)
 
 # compilers to use (9.2)
-#set(CMAKE_C_COMPILER /opt/homebrew/Cellar/gcc/15.1.0/bin/gcc-15)
-#set(CMAKE_CXX_COMPILER  /opt/homebrew/Cellar/gcc/15.1.0/bin/g++-15)
+set(CMAKE_C_COMPILER /opt/homebrew/Cellar/gcc/15.2.0/bin/gcc-15)
+set(CMAKE_CXX_COMPILER  /opt/homebrew/Cellar/gcc/15.2.0/bin/g++-15)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

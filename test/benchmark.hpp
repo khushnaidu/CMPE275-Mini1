@@ -68,7 +68,7 @@ public:
         double sum = std::accumulate(timings.begin(), timings.end(), 0.0);
         double mean = sum / timings.size();
 
-        // Creates a copy to sort (don't modify original timings vector)
+        // Creates a copy to sort 
         std::vector<double> sorted = timings;
         // Sorts in ascending order for median/min/max calculations
         std::sort(sorted.begin(), sorted.end());
