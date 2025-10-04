@@ -9,9 +9,9 @@ class FireRecord
 private:
     double latitude;
     double longitude;
-    std::string timestamp;
+    std::string UTC;
     std::string pollutantType;
-    double value;
+    double concentration;
     std::string unit;
     double rawConcentration;
     int aqi;
@@ -23,16 +23,16 @@ private:
 
 public:
     // Default constructor initializes numeric fields to 0 using initializer list
-    FireRecord() : latitude(0.0), longitude(0.0), value(0.0), rawConcentration(0.0), aqi(0), category(0) {}
+    FireRecord() : latitude(0.0), longitude(0.0), concentration(0.0), rawConcentration(0.0), aqi(0), category(0) {}
 
     // Parameterized constructor takes const references to avoid copying strings (more efficient)
-    FireRecord(double lat, double lon, const std::string &ts, const std::string &pollutant,
-               double val, const std::string &u, double raw, int aqiVal, int cat,
+    FireRecord(double lat, double lon, const std::string &utc, const std::string &pollutant,
+               double conc, const std::string &u, double raw, int aqiVal, int cat,
                const std::string &site, const std::string &agency, const std::string &aqsid,
                const std::string &fullaqsid)
         // Initializer list directly assigns all member variables from parameters
-        : latitude(lat), longitude(lon), timestamp(ts), pollutantType(pollutant),
-          value(val), unit(u), rawConcentration(raw), aqi(aqiVal), category(cat),
+        : latitude(lat), longitude(lon), UTC(utc), pollutantType(pollutant),
+          concentration(conc), unit(u), rawConcentration(raw), aqi(aqiVal), category(cat),
           siteName(site), agencyName(agency), aqsId(aqsid), fullAqsId(fullaqsid) {}
 
     // Getter methods - all marked const since they don't modify the object
@@ -45,17 +45,17 @@ public:
         return longitude;
     }
     // Returns const reference to avoid copying the string
-    const std::string &getTimestamp() const
+    const std::string &getUTC() const
     {
-        return timestamp;
+        return UTC;
     }
     const std::string &getPollutantType() const
     {
         return pollutantType;
     }
-    double getValue() const
+    double getConcentration() const
     {
-        return value;
+        return concentration;
     }
     const std::string &getUnit() const
     {
@@ -88,17 +88,17 @@ public:
         longitude = lon;
     }
     // Takes const reference to avoid unnecessary copying of string parameter
-    void setTimestamp(const std::string &ts)
+    void setUTC(const std::string &utc)
     {
-        timestamp = ts;
+        UTC = utc;
     }
     void setPollutantType(const std::string &pollutant)
     {
         pollutantType = pollutant;
     }
-    void setValue(double val)
+    void setConcentration(double conc)
     {
-        value = val;
+        concentration = conc;
     }
     void setUnit(const std::string &u)
     {
