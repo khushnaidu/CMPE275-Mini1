@@ -16,13 +16,14 @@
 const int LOAD_ITERATIONS = 3;
 const int QUERY_ITERATIONS = 5;
 
-// test all three strategies
+// test all strategies including serial baseline
 const ParallelStrategy STRATEGIES[] = {
+    ParallelStrategy::SERIAL,
     ParallelStrategy::OPENMP,
     ParallelStrategy::CENTRALIZED_QUEUE,
     ParallelStrategy::ROUND_ROBIN
 };
-const int NUM_STRATEGIES = 3;
+const int NUM_STRATEGIES = 4;
 
 
 int main(int argc, char** argv) {

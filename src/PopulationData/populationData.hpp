@@ -24,6 +24,7 @@ private:
     void buildIndexes();
     
     // different implementations for each strategy
+    void loadSerial(const std::vector<std::string>& csvFiles);
     void loadWithOpenMP(const std::vector<std::string>& csvFiles);
     void loadWithCentralizedQueue(const std::vector<std::string>& csvFiles);
     void loadWithRoundRobin(const std::vector<std::string>& csvFiles);

@@ -18,6 +18,11 @@ private:
     // Private helper to build search indexes for faster queries
     void buildIndexes();
 
+    // different implementations for each strategy
+    void loadSerial(const std::vector<std::string>& csvFiles);
+    void loadWithOpenMP(const std::vector<std::string>& csvFiles);
+    void loadWithCentralizedQueue(const std::vector<std::string>& csvFiles);
+    void loadWithRoundRobin(const std::vector<std::string>& csvFiles);
 public:
     // Constructor and destructor
     FireData();

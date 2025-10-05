@@ -4,10 +4,12 @@
 #include "common/csvParser.hpp"
 #include <iostream>
 #include <filesystem>
-// Conditional compilation: only include OpenMP headers if _OPENMP is defined at compile time
-#ifdef _OPENMP
-// Mutex needed for thread-safe access to shared data in parallel sections
 #include <mutex>
+#include <thread>
+
+// only include openmp if we compiled with it
+#ifdef _OPENMP
+#include <omp.h>
 #endif
 
 // Namespace alias makes std::filesystem easier to use as just "fs"
@@ -53,6 +55,63 @@ void FireData::loadFromDirectory(const std::string& dirpath) {
 
     printf("Found %zu CSV files to load...\n", csvFiles.size());
 
+    // pick which loading method based on strategy
+    switch (strategy) {
+        case ParallelStrategy::SERIAL:
+            loadSerial(csvFiles);
+            break;
+        case ParallelStrategy::OPENMP:
+            loadWithOpenMP(csvFiles);
+            break;
+        case ParallelStrategy::CENTRALIZED_QUEUE:
+            loadWithCentralizedQueue(csvFiles);
+            break;
+        case ParallelStrategy::ROUND_ROBIN:
+            loadWithRoundRobin(csvFiles);
+            break;
+    }
+
+    recordCount = records.size();
+    // build indexes now that all data is loaded, makes queries faster
+    buildIndexes();
+}
+
+// ============================================================================
+// baseline: serial implementation (no threading)
+// ============================================================================
+void FireData::loadSerial(const std::vector<std::string>& csvFiles) {
+    // simple loop through each file, no parallelization
+    for (const auto& filename : csvFiles) {
+        auto data = CSVParser::readFile(filename, false, ',');
+
+        for (const auto& row : data) {
+            // need at least 13 columns for a valid fire record
+            if (row.size() < 13) continue;
+
+            FireRecord record;
+            record.setLatitude(CSVParser::toDouble(row[0]));
+            record.setLongitude(CSVParser::toDouble(row[1]));
+            record.setUTC(row[2]);
+            record.setPollutantType(row[3]);
+            record.setConcentration(CSVParser::toDouble(row[4]));
+            record.setUnit(row[5]);
+            record.setRawConcentration(CSVParser::toDouble(row[6]));
+            record.setAqi(CSVParser::toInt(row[7]));
+            record.setCategory(CSVParser::toInt(row[8]));
+            record.setSiteName(row[9]);
+            record.setAgencyName(row[10]);
+            record.setAqsId(row[11]);
+            record.setFullAqsId(row[12]);
+
+            records.push_back(record);
+        }
+    }
+}
+
+// ============================================================================
+// strategy 1: openmp implementation
+// ============================================================================
+void FireData::loadWithOpenMP(const std::vector<std::string>& csvFiles) {
 #ifdef _OPENMP
     // PARALLEL file loading
     std::mutex recordsMutex;
@@ -161,6 +220,19 @@ std::vector<FireRecord> FireData::queryByPollutant(const std::string& pollutantT
 std::vector<FireRecord> FireData::queryByValueRange(double minValue, double maxValue) const {
     std::vector<FireRecord> results;
 
+    switch (strategy) {
+        case ParallelStrategy::SERIAL: {
+            // simple serial loop, no threading
+            for (const auto& record : records) {
+                double concentration = record.getConcentration();
+                if (concentration >= minValue && concentration <= maxValue) {
+                    results.push_back(record);
+                }
+            }
+            break;
+        }
+
+        case ParallelStrategy::OPENMP: {
 #ifdef _OPENMP
     std::mutex resultsMutex;
 
@@ -185,8 +257,804 @@ std::vector<FireRecord> FireData::queryByValueRange(double minValue, double maxV
         }
     }
 #endif
+            break;
+        }
+
+        case ParallelStrategy::CENTRALIZED_QUEUE: {
+            // centralized queue approach, split records into chunks
+            TaskQueue<std::pair<size_t, size_t>> taskQueue;  // <start, end>
+            std::mutex resultsMutex;
+
+            unsigned int numWorkers = getOptimalThreadCount();
+            size_t chunkSize = records.size() / (numWorkers * 4);  // make more chunks for load balancing
+            if (chunkSize == 0) chunkSize = 1;
+
+            // Worker function
+            auto workerFunc = [&]() {
+                std::pair<size_t, size_t> chunk;
+                std::vector<FireRecord> localResults;
+
+                while (taskQueue.pop(chunk)) {
+                    for (size_t i = chunk.first; i < chunk.second && i < records.size(); ++i) {
+                        double concentration = records[i].getConcentration();
+                        if (concentration >= minValue && concentration <= maxValue) {
+                            localResults.push_back(records[i]);
+                        }
+                    }
+                }
+
+                // Merge local results
+                std::lock_guard<std::mutex> lock(resultsMutex);
+                results.insert(results.end(), localResults.begin(), localResults.end());
+            };
+
+            // Start workers
+            std::vector<std::thread> workers;
+            for (unsigned int i = 0; i < numWorkers; ++i) {
+                workers.emplace_back(workerFunc);
+            }
+
+            // Push chunks to queue
+            for (size_t start = 0; start < records.size(); start += chunkSize) {
+                size_t end = std::min(start + chunkSize, records.size());
+                taskQueue.push({start, end});
+            }
+            taskQueue.markFinished();
+
+            // Wait for workers
+            for (auto& worker : workers) {
+                worker.join();
+            }
+            break;
+        }
+
+        case ParallelStrategy::ROUND_ROBIN: {
+            // Round-robin: each worker gets its own subset
+            unsigned int numWorkers = getOptimalThreadCount();
+            std::vector<WorkerQueue<std::pair<size_t, size_t>>> workerQueues(numWorkers);
+            std::mutex resultsMutex;
+
+            size_t chunkSize = records.size() / (numWorkers * 4);
+            if (chunkSize == 0) chunkSize = 1;
+
+            // Worker function
+            auto workerFunc = [&](int workerId) {
+                std::pair<size_t, size_t> chunk;
+                std::vector<FireRecord> localResults;
+
+                while (workerQueues[workerId].pop(chunk)) {
+                    for (size_t i = chunk.first; i < chunk.second && i < records.size(); ++i) {
+                        double concentration = records[i].getConcentration();
+                        if (concentration >= minValue && concentration <= maxValue) {
+                            localResults.push_back(records[i]);
+                        }
+                    }
+                }
+
+                // Merge local results
+                std::lock_guard<std::mutex> lock(resultsMutex);
+                results.insert(results.end(), localResults.begin(), localResults.end());
+            };
+
+            // Start workers
+            std::vector<std::thread> workers;
+            for (unsigned int i = 0; i < numWorkers; ++i) {
+                workers.emplace_back(workerFunc, i);
+            }
+
+            // Distribute chunks in round-robin
+            size_t chunkIdx = 0;
+            for (size_t start = 0; start < records.size(); start += chunkSize) {
+                size_t end = std::min(start + chunkSize, records.size());
+                int targetWorker = chunkIdx % numWorkers;
+                workerQueues[targetWorker].push({start, end});
+                chunkIdx++;
+            }
+
+            // Mark queues as finished
+            for (auto& queue : workerQueues) {
+                queue.markFinished();
+            }
+
+            // Wait for workers
+            for (auto& worker : workers) {
+                worker.join();
+            }
+            break;
+        }
+    }
 
     return results;
+}
+
+// ============================================================================
+// query by geographic bounds using different strategies
+// ============================================================================
+std::vector<FireRecord> FireData::queryByGeographicBounds(
+    double minLat, double maxLat, double minLon, double maxLon, ParallelStrategy strategy) const {
+
+    std::vector<FireRecord> results;
+
+    switch (strategy) {
+        case ParallelStrategy::SERIAL: {
+            // simple serial loop, no threading
+            for (const auto& record : records) {
+                double lat = record.getLatitude();
+                double lon = record.getLongitude();
+                if (lat >= minLat && lat <= maxLat && lon >= minLon && lon <= maxLon) {
+                    results.push_back(record);
+                }
+            }
+            break;
+        }
+
+        case ParallelStrategy::OPENMP: {
+#ifdef _OPENMP
+            std::mutex resultsMutex;
+            #pragma omp parallel for
+            for (size_t i = 0; i < records.size(); ++i) {
+                double lat = records[i].getLatitude();
+                double lon = records[i].getLongitude();
+                if (lat >= minLat && lat <= maxLat && lon >= minLon && lon <= maxLon) {
+                    #pragma omp critical
+                    {
+                        results.push_back(records[i]);
+                    }
+                }
+            }
+#else
+            // Serial fallback
+            for (const auto& record : records) {
+                double lat = record.getLatitude();
+                double lon = record.getLongitude();
+                if (lat >= minLat && lat <= maxLat && lon >= minLon && lon <= maxLon) {
+                    results.push_back(record);
+                }
+            }
+#endif
+            break;
+        }
+
+        case ParallelStrategy::CENTRALIZED_QUEUE: {
+            TaskQueue<std::pair<size_t, size_t>> taskQueue;
+            std::mutex resultsMutex;
+
+            unsigned int numWorkers = getOptimalThreadCount();
+            size_t chunkSize = records.size() / (numWorkers * 4);
+            if (chunkSize == 0) chunkSize = 1;
+
+            auto workerFunc = [&]() {
+                std::pair<size_t, size_t> chunk;
+                std::vector<FireRecord> localResults;
+
+                while (taskQueue.pop(chunk)) {
+                    for (size_t i = chunk.first; i < chunk.second && i < records.size(); ++i) {
+                        double lat = records[i].getLatitude();
+                        double lon = records[i].getLongitude();
+                        if (lat >= minLat && lat <= maxLat && lon >= minLon && lon <= maxLon) {
+                            localResults.push_back(records[i]);
+                        }
+                    }
+                }
+
+                std::lock_guard<std::mutex> lock(resultsMutex);
+                results.insert(results.end(), localResults.begin(), localResults.end());
+            };
+
+            std::vector<std::thread> workers;
+            for (unsigned int i = 0; i < numWorkers; ++i) {
+                workers.emplace_back(workerFunc);
+            }
+
+            for (size_t start = 0; start < records.size(); start += chunkSize) {
+                size_t end = std::min(start + chunkSize, records.size());
+                taskQueue.push({start, end});
+            }
+            taskQueue.markFinished();
+
+            for (auto& worker : workers) {
+                worker.join();
+            }
+            break;
+        }
+
+        case ParallelStrategy::ROUND_ROBIN: {
+            unsigned int numWorkers = getOptimalThreadCount();
+            std::vector<WorkerQueue<std::pair<size_t, size_t>>> workerQueues(numWorkers);
+            std::mutex resultsMutex;
+
+            size_t chunkSize = records.size() / (numWorkers * 4);
+            if (chunkSize == 0) chunkSize = 1;
+
+            auto workerFunc = [&](int workerId) {
+                std::pair<size_t, size_t> chunk;
+                std::vector<FireRecord> localResults;
+
+                while (workerQueues[workerId].pop(chunk)) {
+                    for (size_t i = chunk.first; i < chunk.second && i < records.size(); ++i) {
+                        double lat = records[i].getLatitude();
+                        double lon = records[i].getLongitude();
+                        if (lat >= minLat && lat <= maxLat && lon >= minLon && lon <= maxLon) {
+                            localResults.push_back(records[i]);
+                        }
+                    }
+                }
+
+                std::lock_guard<std::mutex> lock(resultsMutex);
+                results.insert(results.end(), localResults.begin(), localResults.end());
+            };
+
+            std::vector<std::thread> workers;
+            for (unsigned int i = 0; i < numWorkers; ++i) {
+                workers.emplace_back(workerFunc, i);
+            }
+
+            size_t chunkIdx = 0;
+            for (size_t start = 0; start < records.size(); start += chunkSize) {
+                size_t end = std::min(start + chunkSize, records.size());
+                int targetWorker = chunkIdx % numWorkers;
+                workerQueues[targetWorker].push({start, end});
+                chunkIdx++;
+            }
+
+            for (auto& queue : workerQueues) {
+                queue.markFinished();
+            }
+
+            for (auto& worker : workers) {
+                worker.join();
+            }
+            break;
+        }
+    }
+
+    return results;
+}
+
+// ============================================================================
+// query by AQI category using different strategies
+// ============================================================================
+std::vector<FireRecord> FireData::queryByAQICategory(int category, ParallelStrategy strategy) const {
+
+    std::vector<FireRecord> results;
+
+    switch (strategy) {
+        case ParallelStrategy::SERIAL: {
+            // simple serial loop, no threading
+            for (const auto& record : records) {
+                if (record.getCategory() == category) {
+                    results.push_back(record);
+                }
+            }
+            break;
+        }
+
+        case ParallelStrategy::OPENMP: {
+#ifdef _OPENMP
+            std::mutex resultsMutex;
+            #pragma omp parallel for
+            for (size_t i = 0; i < records.size(); ++i) {
+                if (records[i].getCategory() == category) {
+                    #pragma omp critical
+                    {
+                        results.push_back(records[i]);
+                    }
+                }
+            }
+#else
+            // Serial fallback
+            for (const auto& record : records) {
+                if (record.getCategory() == category) {
+                    results.push_back(record);
+                }
+            }
+#endif
+            break;
+        }
+
+        case ParallelStrategy::CENTRALIZED_QUEUE: {
+            TaskQueue<std::pair<size_t, size_t>> taskQueue;
+            std::mutex resultsMutex;
+
+            unsigned int numWorkers = getOptimalThreadCount();
+            size_t chunkSize = records.size() / (numWorkers * 4);
+            if (chunkSize == 0) chunkSize = 1;
+
+            auto workerFunc = [&]() {
+                std::pair<size_t, size_t> chunk;
+                std::vector<FireRecord> localResults;
+
+                while (taskQueue.pop(chunk)) {
+                    for (size_t i = chunk.first; i < chunk.second && i < records.size(); ++i) {
+                        if (records[i].getCategory() == category) {
+                            localResults.push_back(records[i]);
+                        }
+                    }
+                }
+
+                std::lock_guard<std::mutex> lock(resultsMutex);
+                results.insert(results.end(), localResults.begin(), localResults.end());
+            };
+
+            std::vector<std::thread> workers;
+            for (unsigned int i = 0; i < numWorkers; ++i) {
+                workers.emplace_back(workerFunc);
+            }
+
+            for (size_t start = 0; start < records.size(); start += chunkSize) {
+                size_t end = std::min(start + chunkSize, records.size());
+                taskQueue.push({start, end});
+            }
+            taskQueue.markFinished();
+
+            for (auto& worker : workers) {
+                worker.join();
+            }
+            break;
+        }
+
+        case ParallelStrategy::ROUND_ROBIN: {
+            unsigned int numWorkers = getOptimalThreadCount();
+            std::vector<WorkerQueue<std::pair<size_t, size_t>>> workerQueues(numWorkers);
+            std::mutex resultsMutex;
+
+            size_t chunkSize = records.size() / (numWorkers * 4);
+            if (chunkSize == 0) chunkSize = 1;
+
+            auto workerFunc = [&](int workerId) {
+                std::pair<size_t, size_t> chunk;
+                std::vector<FireRecord> localResults;
+
+                while (workerQueues[workerId].pop(chunk)) {
+                    for (size_t i = chunk.first; i < chunk.second && i < records.size(); ++i) {
+                        if (records[i].getCategory() == category) {
+                            localResults.push_back(records[i]);
+                        }
+                    }
+                }
+
+                std::lock_guard<std::mutex> lock(resultsMutex);
+                results.insert(results.end(), localResults.begin(), localResults.end());
+            };
+
+            std::vector<std::thread> workers;
+            for (unsigned int i = 0; i < numWorkers; ++i) {
+                workers.emplace_back(workerFunc, i);
+            }
+
+            size_t chunkIdx = 0;
+            for (size_t start = 0; start < records.size(); start += chunkSize) {
+                size_t end = std::min(start + chunkSize, records.size());
+                int targetWorker = chunkIdx % numWorkers;
+                workerQueues[targetWorker].push({start, end});
+                chunkIdx++;
+            }
+
+            for (auto& queue : workerQueues) {
+                queue.markFinished();
+            }
+
+            for (auto& worker : workers) {
+                worker.join();
+            }
+            break;
+        }
+    }
+
+    return results;
+}
+
+// ============================================================================
+// query by site name using different strategies
+// ============================================================================
+std::vector<FireRecord> FireData::queryBySiteName(
+    const std::string& siteName, ParallelStrategy strategy) const {
+
+    std::vector<FireRecord> results;
+
+    switch (strategy) {
+        case ParallelStrategy::SERIAL: {
+            // simple serial loop, no threading
+            for (const auto& record : records) {
+                if (record.getSiteName() == siteName) {
+                    results.push_back(record);
+                }
+            }
+            break;
+        }
+
+        case ParallelStrategy::OPENMP: {
+#ifdef _OPENMP
+            std::mutex resultsMutex;
+            #pragma omp parallel for
+            for (size_t i = 0; i < records.size(); ++i) {
+                if (records[i].getSiteName() == siteName) {
+                    #pragma omp critical
+                    {
+                        results.push_back(records[i]);
+                    }
+                }
+            }
+#else
+            // Serial fallback
+            for (const auto& record : records) {
+                if (record.getSiteName() == siteName) {
+                    results.push_back(record);
+                }
+            }
+#endif
+            break;
+        }
+
+        case ParallelStrategy::CENTRALIZED_QUEUE: {
+            TaskQueue<std::pair<size_t, size_t>> taskQueue;
+            std::mutex resultsMutex;
+
+            unsigned int numWorkers = getOptimalThreadCount();
+            size_t chunkSize = records.size() / (numWorkers * 4);
+            if (chunkSize == 0) chunkSize = 1;
+
+            auto workerFunc = [&]() {
+                std::pair<size_t, size_t> chunk;
+                std::vector<FireRecord> localResults;
+
+                while (taskQueue.pop(chunk)) {
+                    for (size_t i = chunk.first; i < chunk.second && i < records.size(); ++i) {
+                        if (records[i].getSiteName() == siteName) {
+                            localResults.push_back(records[i]);
+                        }
+                    }
+                }
+
+                std::lock_guard<std::mutex> lock(resultsMutex);
+                results.insert(results.end(), localResults.begin(), localResults.end());
+            };
+
+            std::vector<std::thread> workers;
+            for (unsigned int i = 0; i < numWorkers; ++i) {
+                workers.emplace_back(workerFunc);
+            }
+
+            for (size_t start = 0; start < records.size(); start += chunkSize) {
+                size_t end = std::min(start + chunkSize, records.size());
+                taskQueue.push({start, end});
+            }
+            taskQueue.markFinished();
+
+            for (auto& worker : workers) {
+                worker.join();
+            }
+            break;
+        }
+
+        case ParallelStrategy::ROUND_ROBIN: {
+            unsigned int numWorkers = getOptimalThreadCount();
+            std::vector<WorkerQueue<std::pair<size_t, size_t>>> workerQueues(numWorkers);
+            std::mutex resultsMutex;
+
+            size_t chunkSize = records.size() / (numWorkers * 4);
+            if (chunkSize == 0) chunkSize = 1;
+
+            auto workerFunc = [&](int workerId) {
+                std::pair<size_t, size_t> chunk;
+                std::vector<FireRecord> localResults;
+
+                while (workerQueues[workerId].pop(chunk)) {
+                    for (size_t i = chunk.first; i < chunk.second && i < records.size(); ++i) {
+                        if (records[i].getSiteName() == siteName) {
+                            localResults.push_back(records[i]);
+                        }
+                    }
+                }
+
+                std::lock_guard<std::mutex> lock(resultsMutex);
+                results.insert(results.end(), localResults.begin(), localResults.end());
+            };
+
+            std::vector<std::thread> workers;
+            for (unsigned int i = 0; i < numWorkers; ++i) {
+                workers.emplace_back(workerFunc, i);
+            }
+
+            size_t chunkIdx = 0;
+            for (size_t start = 0; start < records.size(); start += chunkSize) {
+                size_t end = std::min(start + chunkSize, records.size());
+                int targetWorker = chunkIdx % numWorkers;
+                workerQueues[targetWorker].push({start, end});
+                chunkIdx++;
+            }
+
+            for (auto& queue : workerQueues) {
+                queue.markFinished();
+            }
+
+            for (auto& worker : workers) {
+                worker.join();
+            }
+            break;
+        }
+    }
+
+    return results;
+}
+
+// ============================================================================
+// aggregation: calculate average concentration using different strategies
+// ============================================================================
+double FireData::calculateAverageConcentrationByPollutant(
+    const std::string& pollutantType, ParallelStrategy strategy) const {
+
+    double sum = 0.0;
+    size_t count = 0;
+
+    switch (strategy) {
+        case ParallelStrategy::SERIAL: {
+            // simple serial loop, no threading
+            for (const auto& record : records) {
+                if (record.getPollutantType() == pollutantType) {
+                    sum += record.getConcentration();
+                    count++;
+                }
+            }
+            break;
+        }
+
+        case ParallelStrategy::OPENMP: {
+#ifdef _OPENMP
+            // parallel reduction - openmp automatically combines partial sums
+            #pragma omp parallel for reduction(+:sum,count)
+            for (size_t i = 0; i < records.size(); ++i) {
+                if (records[i].getPollutantType() == pollutantType) {
+                    sum += records[i].getConcentration();
+                    count++;
+                }
+            }
+#else
+            for (const auto& record : records) {
+                if (record.getPollutantType() == pollutantType) {
+                    sum += record.getConcentration();
+                    count++;
+                }
+            }
+#endif
+            break;
+        }
+
+        case ParallelStrategy::CENTRALIZED_QUEUE: {
+            TaskQueue<std::pair<size_t, size_t>> taskQueue;
+            std::mutex resultsMutex;
+
+            unsigned int numWorkers = getOptimalThreadCount();
+            size_t chunkSize = records.size() / (numWorkers * 4);
+            if (chunkSize == 0) chunkSize = 1;
+
+            auto workerFunc = [&]() {
+                std::pair<size_t, size_t> chunk;
+                double localSum = 0.0;
+                size_t localCount = 0;
+
+                while (taskQueue.pop(chunk)) {
+                    for (size_t i = chunk.first; i < chunk.second && i < records.size(); ++i) {
+                        if (records[i].getPollutantType() == pollutantType) {
+                            localSum += records[i].getConcentration();
+                            localCount++;
+                        }
+                    }
+                }
+
+                std::lock_guard<std::mutex> lock(resultsMutex);
+                sum += localSum;
+                count += localCount;
+            };
+
+            std::vector<std::thread> workers;
+            for (unsigned int i = 0; i < numWorkers; ++i) {
+                workers.emplace_back(workerFunc);
+            }
+
+            for (size_t start = 0; start < records.size(); start += chunkSize) {
+                size_t end = std::min(start + chunkSize, records.size());
+                taskQueue.push({start, end});
+            }
+            taskQueue.markFinished();
+
+            for (auto& worker : workers) {
+                worker.join();
+            }
+            break;
+        }
+
+        case ParallelStrategy::ROUND_ROBIN: {
+            unsigned int numWorkers = getOptimalThreadCount();
+            std::vector<WorkerQueue<std::pair<size_t, size_t>>> workerQueues(numWorkers);
+            std::mutex resultsMutex;
+
+            size_t chunkSize = records.size() / (numWorkers * 4);
+            if (chunkSize == 0) chunkSize = 1;
+
+            auto workerFunc = [&](int workerId) {
+                std::pair<size_t, size_t> chunk;
+                double localSum = 0.0;
+                size_t localCount = 0;
+
+                while (workerQueues[workerId].pop(chunk)) {
+                    for (size_t i = chunk.first; i < chunk.second && i < records.size(); ++i) {
+                        if (records[i].getPollutantType() == pollutantType) {
+                            localSum += records[i].getConcentration();
+                            localCount++;
+                        }
+                    }
+                }
+
+                std::lock_guard<std::mutex> lock(resultsMutex);
+                sum += localSum;
+                count += localCount;
+            };
+
+            std::vector<std::thread> workers;
+            for (unsigned int i = 0; i < numWorkers; ++i) {
+                workers.emplace_back(workerFunc, i);
+            }
+
+            size_t chunkIdx = 0;
+            for (size_t start = 0; start < records.size(); start += chunkSize) {
+                size_t end = std::min(start + chunkSize, records.size());
+                int targetWorker = chunkIdx % numWorkers;
+                workerQueues[targetWorker].push({start, end});
+                chunkIdx++;
+            }
+
+            for (auto& queue : workerQueues) {
+                queue.markFinished();
+            }
+
+            for (auto& worker : workers) {
+                worker.join();
+            }
+            break;
+        }
+    }
+
+    return count > 0 ? sum / count : 0.0;
+}
+
+// ============================================================================
+// aggregation: count records by category using different strategies
+// ============================================================================
+std::map<int, size_t> FireData::countRecordsByCategory(ParallelStrategy strategy) const {
+
+    std::map<int, size_t> categoryCounts;
+
+    switch (strategy) {
+        case ParallelStrategy::SERIAL: {
+            // simple serial loop, no threading
+            for (const auto& record : records) {
+                categoryCounts[record.getCategory()]++;
+            }
+            break;
+        }
+
+        case ParallelStrategy::OPENMP: {
+#ifdef _OPENMP
+            // each thread maintains local counts, then merge
+            #pragma omp parallel
+            {
+                std::map<int, size_t> localCounts;
+
+                #pragma omp for nowait
+                for (size_t i = 0; i < records.size(); ++i) {
+                    int category = records[i].getCategory();
+                    localCounts[category]++;
+                }
+
+                // merge local counts into global map
+                #pragma omp critical
+                {
+                    for (const auto& pair : localCounts) {
+                        categoryCounts[pair.first] += pair.second;
+                    }
+                }
+            }
+#else
+            for (const auto& record : records) {
+                categoryCounts[record.getCategory()]++;
+            }
+#endif
+            break;
+        }
+
+        case ParallelStrategy::CENTRALIZED_QUEUE: {
+            TaskQueue<std::pair<size_t, size_t>> taskQueue;
+            std::mutex resultsMutex;
+
+            unsigned int numWorkers = getOptimalThreadCount();
+            size_t chunkSize = records.size() / (numWorkers * 4);
+            if (chunkSize == 0) chunkSize = 1;
+
+            auto workerFunc = [&]() {
+                std::pair<size_t, size_t> chunk;
+                std::map<int, size_t> localCounts;
+
+                while (taskQueue.pop(chunk)) {
+                    for (size_t i = chunk.first; i < chunk.second && i < records.size(); ++i) {
+                        int category = records[i].getCategory();
+                        localCounts[category]++;
+                    }
+                }
+
+                std::lock_guard<std::mutex> lock(resultsMutex);
+                for (const auto& pair : localCounts) {
+                    categoryCounts[pair.first] += pair.second;
+                }
+            };
+
+            std::vector<std::thread> workers;
+            for (unsigned int i = 0; i < numWorkers; ++i) {
+                workers.emplace_back(workerFunc);
+            }
+
+            for (size_t start = 0; start < records.size(); start += chunkSize) {
+                size_t end = std::min(start + chunkSize, records.size());
+                taskQueue.push({start, end});
+            }
+            taskQueue.markFinished();
+
+            for (auto& worker : workers) {
+                worker.join();
+            }
+            break;
+        }
+
+        case ParallelStrategy::ROUND_ROBIN: {
+            unsigned int numWorkers = getOptimalThreadCount();
+            std::vector<WorkerQueue<std::pair<size_t, size_t>>> workerQueues(numWorkers);
+            std::mutex resultsMutex;
+
+            size_t chunkSize = records.size() / (numWorkers * 4);
+            if (chunkSize == 0) chunkSize = 1;
+
+            auto workerFunc = [&](int workerId) {
+                std::pair<size_t, size_t> chunk;
+                std::map<int, size_t> localCounts;
+
+                while (workerQueues[workerId].pop(chunk)) {
+                    for (size_t i = chunk.first; i < chunk.second && i < records.size(); ++i) {
+                        int category = records[i].getCategory();
+                        localCounts[category]++;
+                    }
+                }
+
+                std::lock_guard<std::mutex> lock(resultsMutex);
+                for (const auto& pair : localCounts) {
+                    categoryCounts[pair.first] += pair.second;
+                }
+            };
+
+            std::vector<std::thread> workers;
+            for (unsigned int i = 0; i < numWorkers; ++i) {
+                workers.emplace_back(workerFunc, i);
+            }
+
+            size_t chunkIdx = 0;
+            for (size_t start = 0; start < records.size(); start += chunkSize) {
+                size_t end = std::min(start + chunkSize, records.size());
+                int targetWorker = chunkIdx % numWorkers;
+                workerQueues[targetWorker].push({start, end});
+                chunkIdx++;
+            }
+
+            for (auto& queue : workerQueues) {
+                queue.markFinished();
+            }
+
+            for (auto& worker : workers) {
+                worker.join();
+            }
+            break;
+        }
+    }
+
+    return categoryCounts;
 }
 
 void FireData::clear() {

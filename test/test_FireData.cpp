@@ -12,6 +12,14 @@
 const int LOAD_ITERATIONS = 3;
 const int QUERY_ITERATIONS = 5;
 
+// test all strategies including serial baseline
+const ParallelStrategy STRATEGIES[] = {
+    ParallelStrategy::SERIAL,
+    ParallelStrategy::OPENMP,
+    ParallelStrategy::CENTRALIZED_QUEUE,
+    ParallelStrategy::ROUND_ROBIN
+};
+const int NUM_STRATEGIES = 4;
 
 int main(int argc, char** argv) {
     printf("\n========================================\n");
@@ -23,8 +31,8 @@ int main(int argc, char** argv) {
 #endif
     printf("========================================\n\n");
 
-    // Default data path
-    std::string dataPath = "../datasets/2020-fire/data/20200810/20200810-01.csv";
+    // default path to data
+    std::string dataPath = "/Users/khushnaidu/Downloads/data";
     if (argc > 1) {
         dataPath = argv[1];
     }

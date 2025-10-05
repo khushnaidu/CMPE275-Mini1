@@ -11,6 +11,7 @@
 
 // Enum defining different parallelization strategies
 enum class ParallelStrategy {
+    SERIAL,              // baseline - no threading
     OPENMP,              
     CENTRALIZED_QUEUE, 
     ROUND_ROBIN  
@@ -19,6 +20,7 @@ enum class ParallelStrategy {
 // Convert strategy enum to string for printing
 inline const char* strategyToString(ParallelStrategy strategy) {
     switch (strategy) {
+        case ParallelStrategy::SERIAL: return "Serial (No Threading)";
         case ParallelStrategy::OPENMP: return "OpenMP";
         case ParallelStrategy::CENTRALIZED_QUEUE: return "Leader-Worker (Centralized Queue)";
         case ParallelStrategy::ROUND_ROBIN: return "Leader-Worker (Round-Robin)";

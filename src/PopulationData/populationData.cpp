@@ -57,6 +57,9 @@ void PopulationData::loadFromDirectory(const std::string& dirpath, ParallelStrat
 
     // pick which loading method based on strategy
     switch (strategy) {
+        case ParallelStrategy::SERIAL:
+            loadSerial(csvFiles);
+            break;
         case ParallelStrategy::OPENMP:
             loadWithOpenMP(csvFiles);
             break;
@@ -71,6 +74,49 @@ void PopulationData::loadFromDirectory(const std::string& dirpath, ParallelStrat
     recordCount = records.size();
     // build indexes now that all data is loaded, makes queries faster
     buildIndexes();
+}
+
+// ============================================================================
+// baseline: serial implementation (no threading)
+// ============================================================================
+void PopulationData::loadSerial(const std::vector<std::string>& csvFiles) {
+    // simple loop through each file, no parallelization
+    for (const auto& filename : csvFiles) {
+        // skip metadata files
+        if (filename.find("Metadata_") != std::string::npos) {
+            continue;
+        }
+        
+        auto data = CSVParser::readFile(filename, false, ',');
+
+        for (const auto& row : data) {
+            // need at least 4 columns
+            if (row.size() < 4) continue;
+            
+            // skip headers and empty rows
+            if (row[0] == "Data Source" || row[0] == "Country Name" || row[0].empty()) {
+                continue;
+            }
+
+            PopulationRecord record;
+            
+            // basic info
+            record.setCountryName(row[0]);
+            record.setCountryCode(row[1]);
+            record.setIndicatorName(row[2]);
+            record.setIndicatorCode(row[3]);
+
+            // yearly values 1960-2023
+            std::vector<double> yearlyValues;
+            for (size_t i = 4; i < row.size() && i < 68; ++i) {
+                double value = CSVParser::toDouble(row[i]);
+                yearlyValues.push_back(value);
+            }
+            record.setYearlyValues(yearlyValues);
+
+            records.push_back(record);
+        }
+    }
 }
 
 // ============================================================================
@@ -380,6 +426,17 @@ std::vector<PopulationRecord> PopulationData::queryByPopulationRange(
     std::vector<PopulationRecord> results;
     
     switch (strategy) {
+        case ParallelStrategy::SERIAL: {
+            // simple serial loop, no threading
+            for (const auto& record : records) {
+                double population = record.getPopulationForYear(year);
+                if (population >= minPopulation && population <= maxPopulation) {
+                    results.push_back(record);
+                }
+            }
+            break;
+        }
+
         case ParallelStrategy::OPENMP: {
 #ifdef _OPENMP
             std::mutex resultsMutex;
@@ -522,6 +579,23 @@ std::vector<PopulationRecord> PopulationData::queryByYearRange(
     std::vector<PopulationRecord> results;
     
     switch (strategy) {
+        case ParallelStrategy::SERIAL: {
+            // simple serial loop, no threading
+            for (const auto& record : records) {
+                bool hasData = false;
+                for (int year = startYear; year <= endYear; year++) {
+                    if (record.getPopulationForYear(year) > 0) {
+                        hasData = true;
+                        break;
+                    }
+                }
+                if (hasData) {
+                    results.push_back(record);
+                }
+            }
+            break;
+        }
+
         case ParallelStrategy::OPENMP: {
 #ifdef _OPENMP
             std::mutex resultsMutex;
