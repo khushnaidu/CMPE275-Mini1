@@ -1,4 +1,3 @@
-// Parallelization Strategy Definitions and Thread Utilities
 #ifndef PARALLEL_STRATEGY_HPP
 #define PARALLEL_STRATEGY_HPP
 
@@ -9,15 +8,13 @@
 #include <vector>
 #include <functional>
 
-// Enum defining different parallelization strategies
 enum class ParallelStrategy {
-    SERIAL,              // baseline - no threading
+    SERIAL,  
     OPENMP,              
     CENTRALIZED_QUEUE, 
     ROUND_ROBIN  
 };
 
-// Convert strategy enum to string for printing
 inline const char* strategyToString(ParallelStrategy strategy) {
     switch (strategy) {
         case ParallelStrategy::SERIAL: return "Serial (No Threading)";
@@ -29,7 +26,7 @@ inline const char* strategyToString(ParallelStrategy strategy) {
 }
 
 // ============================================================================
-// Task Queue for Centralized Leader-Worker Pattern
+// TaskQueue for centralized leader-worker pattern
 // ============================================================================
 template<typename TaskType>
 class TaskQueue {
@@ -42,21 +39,19 @@ private:
 public:
     TaskQueue() : finished(false) {}
 
-    // Leader pushes tasks into the queue
     void push(const TaskType& task) {
         std::lock_guard<std::mutex> lock(mtx);
         tasks.push(task);
-        cv.notify_one();  // Wake up one waiting worker
+        cv.notify_one();
     }
 
-    // Worker tries to pop a task 
+    // worker tries to pop a task
     bool pop(TaskType& task) {
         std::unique_lock<std::mutex> lock(mtx);
-        // wating for queue to be finished and not empty
         cv.wait(lock, [this]() { return !tasks.empty() || finished; });
         
         if (tasks.empty()) {
-            return false;  // No more tasks and we're done
+            return false;
         }
         
         task = tasks.front();
@@ -64,14 +59,12 @@ public:
         return true;
     }
 
-    // Leader signals that no more tasks will be added
     void markFinished() {
         std::lock_guard<std::mutex> lock(mtx);
         finished = true;
-        cv.notify_all();  // Wake up all workers to exit
+        cv.notify_all();
     }
 
-    // Get current queue size (for monitoring)
     size_t size() const {
         std::lock_guard<std::mutex> lock(mtx);
         return tasks.size();
@@ -79,7 +72,7 @@ public:
 };
 
 // ============================================================================
-// Per-Worker Queue for Round-Robin Leader-Worker Pattern
+// WorkerQueue for round-robin pattern (per-worker queues)
 // ============================================================================
 template<typename TaskType>
 class WorkerQueue {
@@ -92,14 +85,12 @@ private:
 public:
     WorkerQueue() : finished(false) {}
 
-    // Leader pushes task to this specific worker's queue
     void push(const TaskType& task) {
         std::lock_guard<std::mutex> lock(mtx);
         tasks.push(task);
         cv.notify_one();
     }
 
-    // Worker pops from its own queue (no contention with other workers!)
     bool pop(TaskType& task) {
         std::unique_lock<std::mutex> lock(mtx);
         cv.wait(lock, [this]() { return !tasks.empty() || finished; });
@@ -125,13 +116,10 @@ public:
     }
 };
 
-// ============================================================================
-// Helper function to get optimal thread count
-// ============================================================================
+// get optimal thread count based on hardware
 inline unsigned int getOptimalThreadCount() {
     unsigned int hwThreads = std::thread::hardware_concurrency();
-    return hwThreads > 0 ? hwThreads : 4;  // Default to 4 if detection fails
+    return hwThreads > 0 ? hwThreads : 4;
 }
 
 #endif 
-

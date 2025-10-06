@@ -1,4 +1,3 @@
-// Class for storing population data records
 #ifndef POPULATION_RECORD_HPP
 #define POPULATION_RECORD_HPP
 
@@ -12,16 +11,14 @@ private:
     std::string countryCode;
     std::string indicatorName;
     std::string indicatorCode;
-    std::vector<double> yearlyValues; // Population values from 1960-2023
+    std::vector<double> yearlyValues; // 1960-2023
     std::string region;
     std::string incomeGroup;
     std::string specialNotes;
 
 public:
-    // Default constructor
     PopulationRecord() {}
 
-    // Parameterized constructor
     PopulationRecord(const std::string& country, const std::string& code, 
                     const std::string& indicator, const std::string& indCode,
                     const std::vector<double>& values, const std::string& reg = "",
@@ -30,7 +27,7 @@ public:
           indicatorCode(indCode), yearlyValues(values), region(reg), 
           incomeGroup(income), specialNotes(notes) {}
 
-    // Getter methods - all marked const since they don't modify the object
+    // getters
     const std::string& getCountryName() const { return countryName; }
     const std::string& getCountryCode() const { return countryCode; }
     const std::string& getIndicatorName() const { return indicatorName; }
@@ -40,7 +37,7 @@ public:
     const std::string& getIncomeGroup() const { return incomeGroup; }
     const std::string& getSpecialNotes() const { return specialNotes; }
 
-    // Get population for a specific year (1960 is index 0, 2023 is index 63)
+    // 1960 is index 0, 2023 is index 63
     double getPopulationForYear(int year) const {
         int index = year - 1960;
         if (index >= 0 && index < static_cast<int>(yearlyValues.size())) {
@@ -49,7 +46,6 @@ public:
         return 0.0;
     }
 
-    // Get total population across all years
     double getTotalPopulation() const {
         double total = 0.0;
         for (double value : yearlyValues) {
@@ -58,19 +54,17 @@ public:
         return total;
     }
 
-    // Get average population across all years
     double getAveragePopulation() const {
         if (yearlyValues.empty()) return 0.0;
         return getTotalPopulation() / yearlyValues.size();
     }
 
-    // Get population for a specific year range
     double getPopulationForYearRange(int startYear, int endYear) const {
         double total = 0.0;
         int count = 0;
         for (int year = startYear; year <= endYear; year++) {
             double value = getPopulationForYear(year);
-            if (value > 0) { // Only count non-zero values
+            if (value > 0) {
                 total += value;
                 count++;
             }
@@ -78,7 +72,7 @@ public:
         return count > 0 ? total / count : 0.0;
     }
 
-    // Setter methods
+    // setters
     void setCountryName(const std::string& country) { countryName = country; }
     void setCountryCode(const std::string& code) { countryCode = code; }
     void setIndicatorName(const std::string& indicator) { indicatorName = indicator; }
@@ -88,7 +82,6 @@ public:
     void setIncomeGroup(const std::string& income) { incomeGroup = income; }
     void setSpecialNotes(const std::string& notes) { specialNotes = notes; }
 
-    // Add a single yearly value
     void addYearlyValue(double value) { yearlyValues.push_back(value); }
 };
 

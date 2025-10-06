@@ -25,7 +25,7 @@ public:
     // Default constructor initializes numeric fields to 0 using initializer list
     FireRecord() : latitude(0.0), longitude(0.0), value(0.0), rawConcentration(0.0), aqi(0), category(0) {}
 
-    // Parameterized constructor takes const references to avoid copying strings (more efficient)
+    // parameterized constructor takes const references to avoid copying strings 
     FireRecord(double lat, double lon, const std::string &ts, const std::string &pollutant,
                double val, const std::string &u, double raw, int aqiVal, int cat,
                const std::string &site, const std::string &agency, const std::string &aqsid,
@@ -77,6 +77,21 @@ public:
     {
         return siteName;
     }
+    const std::string &getAgencyName() const
+    {
+        return agencyName;
+    }
+    const std::string &getAqsId() const
+    {
+        return aqsId;
+    }
+    const std::string &getFullAqsId() const
+    {
+        return fullAqsId;
+    }
+    
+    // alias for getValue()
+    double getConcentration() const { return value; }
 
     // Setter methods - modify the object's state
     void setLatitude(double lat)
@@ -92,6 +107,7 @@ public:
     {
         timestamp = ts;
     }
+    void setUTC(const std::string &ts) { timestamp = ts; }  // alias for setTimestamp
     void setPollutantType(const std::string &pollutant)
     {
         pollutantType = pollutant;
@@ -100,6 +116,7 @@ public:
     {
         value = val;
     }
+    void setConcentration(double val) { value = val; }  // alias for setValue
     void setUnit(const std::string &u)
     {
         unit = u;

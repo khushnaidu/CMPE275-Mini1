@@ -1,6 +1,5 @@
-// Fire Data Benchmark
-// Runs in unoptimized or optimized mode by compiling with or without -fopenmp
-
+// benchmark test for fire data
+// compares serial vs parallel (OpenMP)
 
 #include <cstdio>
 #include <string>
@@ -8,11 +7,9 @@
 #include "test/benchmark.hpp"
 #include "utils.hpp"
 
-// Constants for number of iterations to run for averaging
 const int LOAD_ITERATIONS = 3;
 const int QUERY_ITERATIONS = 5;
 
-// test all strategies including serial baseline
 const ParallelStrategy STRATEGIES[] = {
     ParallelStrategy::SERIAL,
     ParallelStrategy::OPENMP,
@@ -25,13 +22,12 @@ int main(int argc, char** argv) {
     printf("\n========================================\n");
     printf("Fire Data Benchmark\n");
 #ifdef _OPENMP
-    printf("Mode: OPTIMIZED (OpenMP enabled, threads=%d)\n", numThreads());
+    printf("Mode: PARALLEL (OpenMP enabled, threads=%d)\n", numThreads());
 #else
     printf("Mode: SERIAL (no OpenMP)\n");
 #endif
     printf("========================================\n\n");
 
-    // default path to data
     std::string dataPath = "/Users/khushnaidu/Downloads/data";
     if (argc > 1) {
         dataPath = argv[1];
@@ -39,11 +35,9 @@ int main(int argc, char** argv) {
 
     printf("Data path: %s\n\n", dataPath.c_str());
 
-    // Load the benchmark data iteratively to get average load time
-    // Creates BenchmarkStats object to track timing statistics
+    // load benchmark
     BenchmarkStats loadStats("Load");
     for (int i = 0; i < LOAD_ITERATIONS; ++i) {
-        // Create new FireData object for each iteration
         FireData fireData;
         Timer timer;
 
@@ -53,22 +47,20 @@ int main(int argc, char** argv) {
 
         double elapsed = timer.elapsed_ms();
         loadStats.addTiming(elapsed);
-        // %zu is format specifier for size_t, i + 1 shows iteration number
         printf("Load %d: %.3f ms (%zu records)\n", i + 1, elapsed, fireData.size());
     }
     loadStats.printStatistics();
 
-    // Load once for queries (reuse same data for all query tests)
+    // query benchmarks
     FireData fireData;
     fireData.loadFromDirectory(dataPath);
     printf("Loaded %zu records for query tests\n\n", fireData.size());
 
-    // Run queries iteratively to get average query time
-    BenchmarkStats pollutantStats("Pollutant Query");
+    // pollutant query (uses index)
+    BenchmarkStats pollutantStats("Pollutant Query (PM2.5)");
     for (int i = 0; i < QUERY_ITERATIONS; ++i) {
         Timer timer;
         timer.start();
-        // Query for PM2.5 (fine particulate matter) records using index lookup
         auto results = fireData.queryByPollutant("PM2.5");
         timer.stop();
 
@@ -78,12 +70,11 @@ int main(int argc, char** argv) {
     }
     pollutantStats.printStatistics();
 
-    // Run value range queries iteratively to get average query time
-    BenchmarkStats valueStats("Value Range Query");
+    // value range query (full scan)
+    BenchmarkStats valueStats("Value Range Query (5.0-15.0)");
     for (int i = 0; i < QUERY_ITERATIONS; ++i) {
         Timer timer;
         timer.start();
-        // Query records where value is between 5.0 and 15.0 (requires scanning all records)
         auto results = fireData.queryByValueRange(5.0, 15.0);
         timer.stop();
 
@@ -93,10 +84,9 @@ int main(int argc, char** argv) {
     }
     valueStats.printStatistics();
 
-    printf("========================================\n");
+    printf("\n========================================\n");
     printf("Benchmark Complete\n");
     printf("========================================\n\n");
-
 
     return 0;
 }

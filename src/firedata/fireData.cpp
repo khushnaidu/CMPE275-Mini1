@@ -1,48 +1,36 @@
-// Serial and parallel (OpenMP) implementation of FireData class
-
 #include "firedata/fireData.hpp"
 #include "common/csvParser.hpp"
+#include "common/parallelStrategy.hpp"
 #include <iostream>
 #include <filesystem>
 #include <mutex>
 #include <thread>
 
-// only include openmp if we compiled with it
 #ifdef _OPENMP
 #include <omp.h>
 #endif
 
-// Namespace alias makes std::filesystem easier to use as just "fs"
 namespace fs = std::filesystem;
 
-FireData::FireData() : recordCount(0) {}
+FireData::FireData() : recordCount(0), strategy(ParallelStrategy::OPENMP) {}
 
-
-FireData::~FireData() 
-{ 
+FireData::~FireData() { 
     clear(); 
 }
 
-// Collect CSV files - handle both single file and directory paths
-void FireData::loadFromDirectory(const std::string& dirpath) {
-
+void FireData::loadFromDirectory(const std::string& dirpath, ParallelStrategy strat) {
+    strategy = strat;
     std::vector<std::string> csvFiles;
-
-    // Creates filesystem path object for easier path manipulation
     fs::path inputPath(dirpath);
 
-    // Check if path is a regular file
+    // handle both single files and directories
     if (fs::is_regular_file(inputPath)) {
-        // Single file - check if it's a CSV
         std::string filename = inputPath.string();
-        // Extract file extension by finding last dot and taking substring after it
         if (filename.substr(filename.find_last_of(".") + 1) == "csv") {
             csvFiles.push_back(filename);
         }
     }
-    // Check if path is a directory
     else if (fs::is_directory(inputPath)) {
-        // recursive_directory_iterator walks through all subdirectories (not just top level)
         for (const auto& entry : fs::recursive_directory_iterator(dirpath)) {
             if (entry.is_regular_file()) {
                 std::string filename = entry.path().string();
@@ -53,9 +41,9 @@ void FireData::loadFromDirectory(const std::string& dirpath) {
         }
     }
 
-    printf("Found %zu CSV files to load...\n", csvFiles.size());
+    printf("Found %zu CSV files to load using %s strategy...\n", 
+           csvFiles.size(), strategyToString(strategy));
 
-    // pick which loading method based on strategy
     switch (strategy) {
         case ParallelStrategy::SERIAL:
             loadSerial(csvFiles);
@@ -72,21 +60,18 @@ void FireData::loadFromDirectory(const std::string& dirpath) {
     }
 
     recordCount = records.size();
-    // build indexes now that all data is loaded, makes queries faster
     buildIndexes();
 }
 
 // ============================================================================
-// baseline: serial implementation (no threading)
+// SERIAL (baseline - no parallelization)
 // ============================================================================
 void FireData::loadSerial(const std::vector<std::string>& csvFiles) {
-    // simple loop through each file, no parallelization
     for (const auto& filename : csvFiles) {
         auto data = CSVParser::readFile(filename, false, ',');
 
         for (const auto& row : data) {
-            // need at least 13 columns for a valid fire record
-            if (row.size() < 13) continue;
+            if (row.size() < 13) continue;  // need all 13 columns
 
             FireRecord record;
             record.setLatitude(CSVParser::toDouble(row[0]));
@@ -109,26 +94,21 @@ void FireData::loadSerial(const std::vector<std::string>& csvFiles) {
 }
 
 // ============================================================================
-// strategy 1: openmp implementation
+// OPENMP (data parallelism with #pragma omp)
 // ============================================================================
 void FireData::loadWithOpenMP(const std::vector<std::string>& csvFiles) {
 #ifdef _OPENMP
-    // PARALLEL file loading
     std::mutex recordsMutex;
 
-    // OpenMP pragma distributes loop iterations across multiple threads
     #pragma omp parallel for
     for (size_t f = 0; f < csvFiles.size(); ++f) {
         auto data = CSVParser::readFile(csvFiles[f], false, ',');
-        // Each thread has its own local vector to avoid race conditions
-        std::vector<FireRecord> localRecords;
+        std::vector<FireRecord> localRecords;  // local to each thread
 
         for (const auto& row : data) {
-            // Skip rows that don't have all 13 expected columns
             if (row.size() < 13) continue;
 
             FireRecord record;
-            // Array indexing: row[0] is first column, row[1] is second, etc.
             record.setLatitude(CSVParser::toDouble(row[0]));
             record.setLongitude(CSVParser::toDouble(row[1]));
             record.setTimestamp(row[2]);
@@ -146,15 +126,12 @@ void FireData::loadWithOpenMP(const std::vector<std::string>& csvFiles) {
             localRecords.push_back(record);
         }
 
-        // Critical section: only one thread can execute this block at a time
         #pragma omp critical
         {
-            // Insert all local records into shared records vector
             records.insert(records.end(), localRecords.begin(), localRecords.end());
         }
     }
 #else
-    // SERIAL file loading - only when OpenMP is not available
     for (const auto& filename : csvFiles) {
         auto data = CSVParser::readFile(filename, false, ',');
 
@@ -180,10 +157,127 @@ void FireData::loadWithOpenMP(const std::vector<std::string>& csvFiles) {
         }
     }
 #endif
+}
 
-    recordCount = records.size();
-    // Build indexes after loading all data for faster queries
-    buildIndexes();
+// ============================================================================
+// CENTRALIZED QUEUE (leader-worker with shared queue)
+// ============================================================================
+void FireData::loadWithCentralizedQueue(const std::vector<std::string>& csvFiles) {
+    TaskQueue<std::string> taskQueue;
+    std::mutex recordsMutex;
+    
+    unsigned int numWorkers = getOptimalThreadCount();
+    printf("Using %u worker threads with centralized queue\n", numWorkers);
+    
+    auto workerFunc = [&](int workerId) {
+        std::string filename;
+        std::vector<FireRecord> localRecords;
+        
+        while (taskQueue.pop(filename)) {
+            auto data = CSVParser::readFile(filename, false, ',');
+            
+            for (const auto& row : data) {
+                if (row.size() < 13) continue;
+
+                FireRecord record;
+                record.setLatitude(CSVParser::toDouble(row[0]));
+                record.setLongitude(CSVParser::toDouble(row[1]));
+                record.setUTC(row[2]);
+                record.setPollutantType(row[3]);
+                record.setConcentration(CSVParser::toDouble(row[4]));
+                record.setUnit(row[5]);
+                record.setRawConcentration(CSVParser::toDouble(row[6]));
+                record.setAqi(CSVParser::toInt(row[7]));
+                record.setCategory(CSVParser::toInt(row[8]));
+                record.setSiteName(row[9]);
+                record.setAgencyName(row[10]);
+                record.setAqsId(row[11]);
+                record.setFullAqsId(row[12]);
+
+                localRecords.push_back(record);
+            }
+        }
+        
+        std::lock_guard<std::mutex> lock(recordsMutex);
+        records.insert(records.end(), localRecords.begin(), localRecords.end());
+    };
+    
+    std::vector<std::thread> workers;
+    for (unsigned int i = 0; i < numWorkers; ++i) {
+        workers.emplace_back(workerFunc, i);
+    }
+    
+    for (const auto& file : csvFiles) {
+        taskQueue.push(file);
+    }
+    taskQueue.markFinished();
+    
+    for (auto& worker : workers) {
+        worker.join();
+    }
+}
+
+// ============================================================================
+// ROUND-ROBIN (leader-worker with per-worker queues)
+// ============================================================================
+void FireData::loadWithRoundRobin(const std::vector<std::string>& csvFiles) {
+    unsigned int numWorkers = getOptimalThreadCount();
+    printf("Using %u worker threads with round-robin distribution\n", numWorkers);
+    
+    std::vector<WorkerQueue<std::string>> workerQueues(numWorkers);
+    std::mutex recordsMutex;
+    
+    auto workerFunc = [&](int workerId) {
+        std::string filename;
+        std::vector<FireRecord> localRecords;
+        
+        while (workerQueues[workerId].pop(filename)) {
+            auto data = CSVParser::readFile(filename, false, ',');
+            
+            for (const auto& row : data) {
+                if (row.size() < 13) continue;
+
+                FireRecord record;
+                record.setLatitude(CSVParser::toDouble(row[0]));
+                record.setLongitude(CSVParser::toDouble(row[1]));
+                record.setUTC(row[2]);
+                record.setPollutantType(row[3]);
+                record.setConcentration(CSVParser::toDouble(row[4]));
+                record.setUnit(row[5]);
+                record.setRawConcentration(CSVParser::toDouble(row[6]));
+                record.setAqi(CSVParser::toInt(row[7]));
+                record.setCategory(CSVParser::toInt(row[8]));
+                record.setSiteName(row[9]);
+                record.setAgencyName(row[10]);
+                record.setAqsId(row[11]);
+                record.setFullAqsId(row[12]);
+
+                localRecords.push_back(record);
+            }
+        }
+        
+        std::lock_guard<std::mutex> lock(recordsMutex);
+        records.insert(records.end(), localRecords.begin(), localRecords.end());
+    };
+    
+    std::vector<std::thread> workers;
+    for (unsigned int i = 0; i < numWorkers; ++i) {
+        workers.emplace_back(workerFunc, i);
+    }
+    
+    // distribute files round-robin style
+    for (size_t i = 0; i < csvFiles.size(); ++i) {
+        int targetWorker = i % numWorkers;  
+        workerQueues[targetWorker].push(csvFiles[i]);
+    }
+    
+    for (auto& queue : workerQueues) {
+        queue.markFinished();
+    }
+    
+    for (auto& worker : workers) {
+        worker.join();
+    }
 }
 
 void FireData::buildIndexes() {
@@ -194,7 +288,6 @@ void FireData::buildIndexes() {
         for (size_t i = 0; i < records.size(); ++i) {
             #pragma omp critical
             {
-                // Maps pollutant type string to record index for O(log n) lookup
                 pollutantIndex.insert({records[i].getPollutantType(), i});
             }
         }
@@ -207,22 +300,18 @@ void FireData::buildIndexes() {
 
 std::vector<FireRecord> FireData::queryByPollutant(const std::string& pollutantType) const {
     std::vector<FireRecord> results;
-    // equal_range returns pair of iterators: [first matching, one past last matching]
     auto range = pollutantIndex.equal_range(pollutantType);
-    // Iterate through all records matching the pollutant type
     for (auto it = range.first; it != range.second; ++it) {
-        // it->second is the record index stored in the multimap
         results.push_back(records[it->second]);
     }
     return results;
 }
 
-std::vector<FireRecord> FireData::queryByValueRange(double minValue, double maxValue) const {
+std::vector<FireRecord> FireData::queryByValueRange(double minValue, double maxValue, ParallelStrategy strat) const {
     std::vector<FireRecord> results;
 
-    switch (strategy) {
+    switch (strat) {
         case ParallelStrategy::SERIAL: {
-            // simple serial loop, no threading
             for (const auto& record : records) {
                 double concentration = record.getConcentration();
                 if (concentration >= minValue && concentration <= maxValue) {
@@ -235,12 +324,9 @@ std::vector<FireRecord> FireData::queryByValueRange(double minValue, double maxV
         case ParallelStrategy::OPENMP: {
 #ifdef _OPENMP
     std::mutex resultsMutex;
-
-    // Parallelize search across all records
     #pragma omp parallel for
     for (size_t i = 0; i < records.size(); ++i) {
         double value = records[i].getValue();
-        // Check if value falls within the specified range (inclusive)
         if (value >= minValue && value <= maxValue) {
             #pragma omp critical
             {
@@ -249,7 +335,6 @@ std::vector<FireRecord> FireData::queryByValueRange(double minValue, double maxV
         }
     }
 #else
-    // Serial version scans through all records sequentially
     for (const auto& record : records) {
         double value = record.getValue();
         if (value >= minValue && value <= maxValue) {
@@ -261,15 +346,13 @@ std::vector<FireRecord> FireData::queryByValueRange(double minValue, double maxV
         }
 
         case ParallelStrategy::CENTRALIZED_QUEUE: {
-            // centralized queue approach, split records into chunks
-            TaskQueue<std::pair<size_t, size_t>> taskQueue;  // <start, end>
+            TaskQueue<std::pair<size_t, size_t>> taskQueue;
             std::mutex resultsMutex;
 
             unsigned int numWorkers = getOptimalThreadCount();
-            size_t chunkSize = records.size() / (numWorkers * 4);  // make more chunks for load balancing
+            size_t chunkSize = records.size() / (numWorkers * 4);
             if (chunkSize == 0) chunkSize = 1;
 
-            // Worker function
             auto workerFunc = [&]() {
                 std::pair<size_t, size_t> chunk;
                 std::vector<FireRecord> localResults;
@@ -283,25 +366,21 @@ std::vector<FireRecord> FireData::queryByValueRange(double minValue, double maxV
                     }
                 }
 
-                // Merge local results
                 std::lock_guard<std::mutex> lock(resultsMutex);
                 results.insert(results.end(), localResults.begin(), localResults.end());
             };
 
-            // Start workers
             std::vector<std::thread> workers;
             for (unsigned int i = 0; i < numWorkers; ++i) {
                 workers.emplace_back(workerFunc);
             }
 
-            // Push chunks to queue
             for (size_t start = 0; start < records.size(); start += chunkSize) {
                 size_t end = std::min(start + chunkSize, records.size());
                 taskQueue.push({start, end});
             }
             taskQueue.markFinished();
 
-            // Wait for workers
             for (auto& worker : workers) {
                 worker.join();
             }
@@ -309,7 +388,6 @@ std::vector<FireRecord> FireData::queryByValueRange(double minValue, double maxV
         }
 
         case ParallelStrategy::ROUND_ROBIN: {
-            // Round-robin: each worker gets its own subset
             unsigned int numWorkers = getOptimalThreadCount();
             std::vector<WorkerQueue<std::pair<size_t, size_t>>> workerQueues(numWorkers);
             std::mutex resultsMutex;
@@ -317,7 +395,6 @@ std::vector<FireRecord> FireData::queryByValueRange(double minValue, double maxV
             size_t chunkSize = records.size() / (numWorkers * 4);
             if (chunkSize == 0) chunkSize = 1;
 
-            // Worker function
             auto workerFunc = [&](int workerId) {
                 std::pair<size_t, size_t> chunk;
                 std::vector<FireRecord> localResults;
@@ -331,18 +408,15 @@ std::vector<FireRecord> FireData::queryByValueRange(double minValue, double maxV
                     }
                 }
 
-                // Merge local results
                 std::lock_guard<std::mutex> lock(resultsMutex);
                 results.insert(results.end(), localResults.begin(), localResults.end());
             };
 
-            // Start workers
             std::vector<std::thread> workers;
             for (unsigned int i = 0; i < numWorkers; ++i) {
                 workers.emplace_back(workerFunc, i);
             }
 
-            // Distribute chunks in round-robin
             size_t chunkIdx = 0;
             for (size_t start = 0; start < records.size(); start += chunkSize) {
                 size_t end = std::min(start + chunkSize, records.size());
@@ -351,12 +425,10 @@ std::vector<FireRecord> FireData::queryByValueRange(double minValue, double maxV
                 chunkIdx++;
             }
 
-            // Mark queues as finished
             for (auto& queue : workerQueues) {
                 queue.markFinished();
             }
 
-            // Wait for workers
             for (auto& worker : workers) {
                 worker.join();
             }

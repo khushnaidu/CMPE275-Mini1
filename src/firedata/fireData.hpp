@@ -1,4 +1,3 @@
-// Facade for managing fire data records
 #ifndef FIRE_DATA_HPP
 #define FIRE_DATA_HPP
 
@@ -6,39 +5,47 @@
 #include <string>
 #include <map>
 #include "firedata/fireRecord.hpp"
+#include "common/parallelStrategy.hpp"
 
 class FireData {
 private:
-    // Dynamic array storing all fire records
     std::vector<FireRecord> records;
-    // Multimap allows multiple records with same key (pollutant type) -> maps to record index
-    std::multimap<std::string, size_t> pollutantIndex;
+    std::multimap<std::string, size_t> pollutantIndex;  // maps pollutant type to record index
     size_t recordCount;
+    ParallelStrategy strategy;
 
-    // Private helper to build search indexes for faster queries
     void buildIndexes();
-
-    // different implementations for each strategy
+    
+    // different loading strategies
     void loadSerial(const std::vector<std::string>& csvFiles);
     void loadWithOpenMP(const std::vector<std::string>& csvFiles);
     void loadWithCentralizedQueue(const std::vector<std::string>& csvFiles);
     void loadWithRoundRobin(const std::vector<std::string>& csvFiles);
+
 public:
-    // Constructor and destructor
     FireData();
     ~FireData();
 
-    // Loads all CSV files from a directory (or single file) recursively
-    void loadFromDirectory(const std::string& dirpath);
-    // Query methods return new vectors containing matching records
+    void loadFromDirectory(const std::string& dirpath, ParallelStrategy strat = ParallelStrategy::OPENMP);
+    
+    // query methods
     std::vector<FireRecord> queryByPollutant(const std::string& pollutantType) const;
-    std::vector<FireRecord> queryByValueRange(double minValue, double maxValue) const;
+    std::vector<FireRecord> queryByValueRange(double minValue, double maxValue, 
+                                              ParallelStrategy strat = ParallelStrategy::OPENMP) const;
+    std::vector<FireRecord> queryByGeographicBounds(double minLat, double maxLat, 
+                                                     double minLon, double maxLon,
+                                                     ParallelStrategy strat = ParallelStrategy::OPENMP) const;
+    std::vector<FireRecord> queryByAQICategory(int category, 
+                                               ParallelStrategy strat = ParallelStrategy::OPENMP) const;
+    std::vector<FireRecord> queryBySiteName(const std::string& siteName, 
+                                            ParallelStrategy strat = ParallelStrategy::OPENMP) const;
+    
+    // aggregation methods
+    double calculateAverageConcentrationByPollutant(const std::string& pollutantType,
+                                                    ParallelStrategy strat = ParallelStrategy::OPENMP) const;
+    std::map<int, size_t> countRecordsByCategory(ParallelStrategy strat = ParallelStrategy::OPENMP) const;
 
-    // Inline getter - function body in header for potential compiler optimization
-    size_t size() const 
-    { 
-        return recordCount; 
-    }
+    size_t size() const { return recordCount; }
     void clear();
 };
 
