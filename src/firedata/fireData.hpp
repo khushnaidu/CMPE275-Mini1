@@ -32,18 +32,6 @@ public:
     std::vector<FireRecord> queryByPollutant(const std::string& pollutantType) const;
     std::vector<FireRecord> queryByValueRange(double minValue, double maxValue, 
                                               ParallelStrategy strat = ParallelStrategy::OPENMP) const;
-    std::vector<FireRecord> queryByGeographicBounds(double minLat, double maxLat, 
-                                                     double minLon, double maxLon,
-                                                     ParallelStrategy strat = ParallelStrategy::OPENMP) const;
-    std::vector<FireRecord> queryByAQICategory(int category, 
-                                               ParallelStrategy strat = ParallelStrategy::OPENMP) const;
-    std::vector<FireRecord> queryBySiteName(const std::string& siteName, 
-                                            ParallelStrategy strat = ParallelStrategy::OPENMP) const;
-    
-    // aggregation methods
-    double calculateAverageConcentrationByPollutant(const std::string& pollutantType,
-                                                    ParallelStrategy strat = ParallelStrategy::OPENMP) const;
-    std::map<int, size_t> countRecordsByCategory(ParallelStrategy strat = ParallelStrategy::OPENMP) const;
 
     size_t size() const { return recordCount; }
     void clear();

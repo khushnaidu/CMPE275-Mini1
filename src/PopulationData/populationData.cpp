@@ -60,7 +60,6 @@ void PopulationData::loadFromDirectory(const std::string& dirpath, ParallelStrat
     }
 
     recordCount = records.size();
-    buildIndexes();
 }
 
 // ============================================================================
@@ -311,57 +310,6 @@ void PopulationData::loadWithRoundRobin(const std::vector<std::string>& csvFiles
     for (auto& worker : workers) {
         worker.join();
     }
-}
-
-void PopulationData::buildIndexes() {
-    countryIndex.clear();
-    regionIndex.clear();
-    incomeGroupIndex.clear();
-
-    #ifdef _OPENMP
-        #pragma omp parallel for
-        for (size_t i = 0; i < records.size(); ++i) {
-            #pragma omp critical
-            {
-                countryIndex.insert({records[i].getCountryCode(), i});
-                regionIndex.insert({records[i].getRegion(), i});
-                incomeGroupIndex.insert({records[i].getIncomeGroup(), i});
-            }
-        }
-    #else
-        for (size_t i = 0; i < records.size(); ++i) {
-            countryIndex.insert({records[i].getCountryCode(), i});
-            regionIndex.insert({records[i].getRegion(), i});
-            incomeGroupIndex.insert({records[i].getIncomeGroup(), i});
-        }
-    #endif
-}
-
-std::vector<PopulationRecord> PopulationData::queryByCountry(const std::string& countryCode) const {
-    std::vector<PopulationRecord> results;
-    auto range = countryIndex.equal_range(countryCode);
-    for (auto it = range.first; it != range.second; ++it) {
-        results.push_back(records[it->second]);
-    }
-    return results;
-}
-
-std::vector<PopulationRecord> PopulationData::queryByRegion(const std::string& region) const {
-    std::vector<PopulationRecord> results;
-    auto range = regionIndex.equal_range(region);
-    for (auto it = range.first; it != range.second; ++it) {
-        results.push_back(records[it->second]);
-    }
-    return results;
-}
-
-std::vector<PopulationRecord> PopulationData::queryByIncomeGroup(const std::string& incomeGroup) const {
-    std::vector<PopulationRecord> results;
-    auto range = incomeGroupIndex.equal_range(incomeGroup);
-    for (auto it = range.first; it != range.second; ++it) {
-        results.push_back(records[it->second]);
-    }
-    return results;
 }
 
 // query by population range 
@@ -666,8 +614,5 @@ std::vector<PopulationRecord> PopulationData::queryByYearRange(
 
 void PopulationData::clear() {
     records.clear();
-    countryIndex.clear();
-    regionIndex.clear();
-    incomeGroupIndex.clear();
     recordCount = 0;
 }

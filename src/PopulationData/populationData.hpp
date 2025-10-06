@@ -10,12 +10,7 @@
 class PopulationData {
 private:
     std::vector<PopulationRecord> records;
-    std::multimap<std::string, size_t> countryIndex;  // maps country code to record index
-    std::multimap<std::string, size_t> regionIndex;
-    std::multimap<std::string, size_t> incomeGroupIndex;
     size_t recordCount;
-
-    void buildIndexes();
     
     // different loading methods for each strategy
     void loadSerial(const std::vector<std::string>& csvFiles);
@@ -32,10 +27,6 @@ public:
                           ParallelStrategy strategy = ParallelStrategy::OPENMP);
     
     // query methods
-    std::vector<PopulationRecord> queryByCountry(const std::string& countryCode) const;
-    std::vector<PopulationRecord> queryByRegion(const std::string& region) const;
-    std::vector<PopulationRecord> queryByIncomeGroup(const std::string& incomeGroup) const;
-    
     std::vector<PopulationRecord> queryByPopulationRange(double minPopulation, double maxPopulation, 
                                                          int year = 2020,
                                                          ParallelStrategy strategy = ParallelStrategy::OPENMP) const;
