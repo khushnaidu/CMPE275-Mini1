@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <string>
 #include "firedata/fireData.hpp"
+#include "common/parallelStrategy.hpp"
 #include "test/benchmark.hpp"
 #include "utils.hpp"
 
@@ -49,11 +50,10 @@ int main(int argc, char** argv) {
         loadStats.addTiming(elapsed);
         printf("Load %d: %.3f ms (%zu records)\n", i + 1, elapsed, fireData.size());
     }
-    loadStats.printStatistics();
 
     // query benchmarks
     FireData fireData;
-    fireData.loadFromDirectory(dataPath);
+    fireData.loadFromDirectory(dataPath, ParallelStrategy::OPENMP);
     printf("Loaded %zu records for query tests\n\n", fireData.size());
 
     // pollutant query (uses index)
@@ -82,7 +82,6 @@ int main(int argc, char** argv) {
         valueStats.addTiming(elapsed);
         printf("Value range query %d: %.3f ms (%zu results)\n", i + 1, elapsed, results.size());
     }
-    valueStats.printStatistics();
 
     printf("\n========================================\n");
     printf("Benchmark Complete\n");

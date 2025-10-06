@@ -31,7 +31,6 @@ add_executable(test_population
     test/test_PopulationData.cpp
 )
 
-
 # Required for OpenMP on macOS - links C++ standard library
 target_link_libraries(test_fire c++)
 target_link_libraries(test_population c++)
