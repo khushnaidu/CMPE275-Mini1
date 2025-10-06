@@ -1,5 +1,5 @@
 // openMP utility functions
-
+// Taken from leader-adv lab - John Gash
 #ifdef _OPENMP
 #include "omp.h"
 #endif
